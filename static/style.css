@@ -237,4 +237,29 @@ body {
 .cmp-bar { width: 90px; height: 5px; background: #1a1f27; border-radius: 3px; overflow: hidden; }
 .cmp-bar > div { height: 100%; background: var(--blue); transition: width .3s; }
 
+/* 통일 진행바 */
+.pbar {
+  width: 100%; height: 7px; background: #11151c;
+  border: 1px solid var(--border); border-radius: 5px;
+  overflow: hidden; margin-top: 8px;
+}
+.pbar > div {
+  height: 100%; width: 0; background: var(--accent);
+  border-radius: 5px; transition: width .35s ease;
+}
+.pbar.b > div { background: var(--blue); }
+.pbar.g > div { background: var(--green); }
+.pbar.y > div { background: var(--yellow); }
+/* 총량 미상(라이브 등) — 좌우로 흐르는 불확정 바 */
+.pbar.indet > div {
+  width: 38% !important;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: indet 1.15s ease-in-out infinite;
+}
+.pbar.b.indet > div { background: linear-gradient(90deg, transparent, var(--blue), transparent); }
+.pbar.y.indet > div { background: linear-gradient(90deg, transparent, var(--yellow), transparent); }
+@keyframes indet { 0% { margin-left: -40%; } 100% { margin-left: 102%; } }
+.pbar.sm { width: 120px; margin-top: 0; flex: none; }
+.pct-tag { font-size: 12px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+
 .hidden { display: none !important; }

@@ -133,24 +133,25 @@ def main():
 
     mode = "a" if (offset > 1.0 and base_idx > 0) else "w"
     n = base_idx
-    with open(srt_path, mode, encoding="utf-8") as srt, \
-            open(txt_path, mode, encoding="utf-8") as txt:
-        for seg in segments:
-            n += 1
-            line = seg.text.strip()
-            st, en = seg.start + offset, seg.end + offset
-            srt.write("%d\n%s --> %s\n%s\n\n" % (n, _srt_ts(st), _srt_ts(en), line))
-            txt.write(line + "\n")
-            srt.flush()
-            txt.flush()
-            if total:
-                print("PROGRESS %.1f %.1f" % (en, total), flush=True)
-
-    if tmp_wav:
-        try:
-            os.remove(tmp_wav)
-        except OSError:
-            pass
+    try:
+        with open(srt_path, mode, encoding="utf-8") as srt, \
+                open(txt_path, mode, encoding="utf-8") as txt:
+            for seg in segments:
+                n += 1
+                line = seg.text.strip()
+                st, en = seg.start + offset, seg.end + offset
+                srt.write("%d\n%s --> %s\n%s\n\n" % (n, _srt_ts(st), _srt_ts(en), line))
+                txt.write(line + "\n")
+                srt.flush()
+                txt.flush()
+                if total:
+                    print("PROGRESS %.1f %.1f" % (en, total), flush=True)
+    finally:
+        if tmp_wav:  # 중간 실패해도 임시 wav 제거
+            try:
+                os.remove(tmp_wav)
+            except OSError:
+                pass
     print("DONE %d" % n, flush=True)
 
 

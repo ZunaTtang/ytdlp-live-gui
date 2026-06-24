@@ -214,6 +214,7 @@ class Job:
         self.opts = opts
         self.status = "starting"  # starting/waiting/recording/muxing/finished/error/stopped
         self.progress = ""
+        self.percent = None       # 다운로드 % (라이브는 총량 미상 → None)
         self.title = ""
         self.created = time.time()
         self.started_recording = None
@@ -227,7 +228,8 @@ class Job:
     def to_dict(self):
         return {
             "id": self.id, "url": self.url, "quality": self.quality,
-            "status": self.status, "progress": self.progress, "title": self.title,
+            "status": self.status, "progress": self.progress,
+            "percent": self.percent, "title": self.title,
             "created": self.created, "started_recording": self.started_recording,
             "final_file": self.final_file, "returncode": self.returncode,
         }
@@ -256,8 +258,9 @@ def _build_command(job):
            "-N", str(int(o.get("threads", 4) or 4)),
            "-f", fmt,
            "--progress-template",
-           "download:" + PROG_TAG + "%(progress._downloaded_bytes_str)s @ "
-           "%(progress._speed_str)s  [%(info.format_id)s]"]
+           "download:" + PROG_TAG + "%(progress._percent_str)s|"
+           "%(progress._downloaded_bytes_str)s|%(progress._speed_str)s|"
+           "%(progress._eta_str)s|%(info.format_id)s"]
 
     if o.get("wait", True):
         cmd += ["--wait-for-video", str(int(o.get("retry", 30) or 30))]
@@ -290,7 +293,20 @@ def _classify(job, line):
     # 진행률 라인 (동시 다운로드 시 "1: @@P@@..." 처럼 접두사가 붙을 수 있음)
     idx = line.find(PROG_TAG)
     if idx != -1:
-        job.progress = "녹화 중 · " + line[idx + len(PROG_TAG):].strip()
+        payload = line[idx + len(PROG_TAG):].strip()
+        parts = (payload.split("|") + ["", "", "", "", ""])[:5]
+        pct_s, dl_s, spd_s, eta_s, fmt_s = [p.strip() for p in parts]
+        pm = re.search(r"(\d+(?:\.\d+)?)\s*%", pct_s)
+        job.percent = float(pm.group(1)) if pm else None
+        txt = "녹화 중 · "
+        if job.percent is not None:
+            txt += "%.0f%% · " % job.percent
+        txt += dl_s
+        if spd_s and "unknown" not in spd_s.lower():
+            txt += " @ " + spd_s
+        if eta_s and "unknown" not in eta_s.lower() and eta_s not in ("--:--", ""):
+            txt += " · 남은시간 " + eta_s
+        job.progress = txt
         if job.status in ("starting", "waiting"):
             job.status = "recording"
         if job.started_recording is None:

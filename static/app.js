@@ -72,6 +72,24 @@ function fmtAgo(ts) {
   return h + "시간 " + m + "분";
 }
 
+function jobBar(j) {
+  switch (j.status) {
+    case "finished":
+      return `<div class="pbar g"><div style="width:100%"></div></div>`;
+    case "muxing":
+      return `<div class="pbar b indet"><div></div></div>`;
+    case "waiting":
+    case "starting":
+      return `<div class="pbar y indet"><div></div></div>`;
+    case "recording":
+      return (j.percent != null)
+        ? `<div class="pbar"><div style="width:${Math.min(100, j.percent)}%"></div></div>`
+        : `<div class="pbar indet"><div></div></div>`;  // 라이브: 총량 미상
+    default:
+      return "";  // error / stopped
+  }
+}
+
 function jobCard(j) {
   const card = document.createElement("div");
   card.className = "job-card " + j.status;
@@ -97,13 +115,18 @@ function jobCard(j) {
   const finalLine = j.final_file
     ? `<div class="job-progress" style="color:var(--green)">📦 ${esc(j.final_file)}</div>` : "";
 
+  const pctTag = (j.status === "recording" && j.percent != null)
+    ? `<span class="pct-tag">${Math.min(100, Math.round(j.percent))}%</span>` : "";
+
   card.innerHTML = `
     <div class="job-top">
       <span class="badge ${j.status}">${label}</span>
       <span class="job-url"><a href="${esc(j.url)}" target="_blank">${esc(j.url)}</a></span>
       <span class="job-q">${esc(j.quality)}</span>
+      ${pctTag}
     </div>
     <div class="job-progress">${esc(j.progress || "출력 대기 중...")}</div>
+    ${jobBar(j)}
     ${finalLine}
     <div class="job-actions">
       ${actions}
@@ -235,16 +258,19 @@ async function pollTranscribe() {
   } catch (e) { /* ignore */ }
 }
 
-function progHtml(task, color) {
-  const c = color || "var(--blue)";
-  return `<span class="cmp-prog" style="color:${c}">${task.percent || 0}% · ${esc(task.detail || "")}</span>
-          <div class="cmp-bar"><div style="width:${task.percent || 0}%"></div></div>`;
+function progHtml(task, cls) {
+  const p = task.percent || 0;
+  const indet = ["installing", "starting"].includes(task.status) || p <= 0;
+  const bar = indet
+    ? `<div class="pbar sm ${cls} indet"><div></div></div>`
+    : `<div class="pbar sm ${cls}"><div style="width:${Math.min(100, p)}%"></div></div>`;
+  return `<span class="cmp-prog">${indet ? "" : p + "% · "}${esc(task.detail || "")}</span>${bar}`;
 }
 
 function compressCtl(f) {
   const t = compressTasks[f.name];
   const active = t && (t.status === "compressing" || t.status === "starting");
-  if (active) return progHtml(t);
+  if (active) return progHtml(t, "b");
   if (t && t.status === "done")
     return `<span class="cmp-prog" style="color:var(--green)">✓ ${esc(t.detail || "압축 완료")}</span>`;
   if (t && t.status === "error")
@@ -257,7 +283,7 @@ function compressCtl(f) {
 function transcriptCtl(f) {
   const t = transcribeTasks[f.name];
   const active = t && ["starting", "installing", "transcribing"].includes(t.status);
-  if (active) return progHtml(t, "var(--yellow)");
+  if (active) return progHtml(t, "y");
   if (t && t.status === "done")
     return `<span class="cmp-prog" style="color:var(--green)">✓ 대본 생성됨 (.txt/.srt)</span>`;
   if (t && t.status === "error")
