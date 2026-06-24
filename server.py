@@ -543,6 +543,126 @@ def remove_job(job_id):
 
 
 # ---------------------------------------------------------------------------
+# Claude 분석용 압축 (500MB 미만으로 재인코딩)
+# ---------------------------------------------------------------------------
+ANALYSIS_SUFFIX = "_분석용"
+compress_tasks = {}   # id -> dict
+_ctask_lock = threading.Lock()
+
+
+def list_recordings():
+    out = []
+    try:
+        names = os.listdir(REC_DIR)
+    except OSError:
+        return out
+    for f in sorted(names):
+        if not f.lower().endswith((".mp4", ".mkv", ".webm", ".m4a")):
+            continue
+        p = os.path.join(REC_DIR, f)
+        if not os.path.isfile(p):
+            continue
+        out.append({
+            "name": f,
+            "size_mb": round(os.path.getsize(p) / 1048576, 1),
+            "is_analysis": ANALYSIS_SUFFIX in f,
+        })
+    return out
+
+
+def _media_duration(path):
+    """ffmpeg로 영상 길이(초) 추출."""
+    r = subprocess.run([ffmpeg_path() or "ffmpeg", "-i", path],
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", r.stderr)
+    if not m:
+        return 0.0
+    h, mn, s = m.groups()
+    return int(h) * 3600 + int(mn) * 60 + float(s)
+
+
+def _compress_worker(task):
+    src = task["src"]
+    target_mb = task["target_mb"]
+    try:
+        dur = _media_duration(src)
+        task["duration"] = dur
+        if dur <= 0:
+            raise RuntimeError("영상 길이를 읽지 못했습니다")
+
+        # 컨테이너 오버헤드 6% 여유 → 총 비트레이트(kbps)
+        total_kbps = (target_mb * 8192 * 0.94) / dur
+        a_kbps = 96 if total_kbps > 320 else (64 if total_kbps > 180 else 48)
+        # 상한 2500k: 짧은 영상이 불필요하게 커지지 않게 (긴 영상은 자동으로 더 낮음)
+        v_kbps = int(max(80, min(2500, total_kbps - a_kbps)))
+        height = 360 if v_kbps < 250 else 480
+
+        out = task["out"]
+        ff = ffmpeg_path() or "ffmpeg"
+        cmd = [ff, "-y", "-i", src,
+               "-vf", "scale=-2:'min(%d,ih)'" % height,
+               "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+               "-b:v", "%dk" % v_kbps,
+               "-maxrate", "%dk" % int(v_kbps * 1.5),
+               "-bufsize", "%dk" % (v_kbps * 2),
+               "-c:a", "aac", "-b:a", "%dk" % a_kbps,
+               "-movflags", "+faststart",
+               "-progress", "pipe:1", "-nostats", out]
+        task["status"] = "compressing"
+        task["detail"] = "%dp · 영상 %dk / 음성 %dk" % (height, v_kbps, a_kbps)
+
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True,
+                             encoding="utf-8", errors="replace")
+        task["proc"] = p
+        for line in p.stdout:
+            line = line.strip()
+            mm = re.match(r"out_time=(\d+):(\d+):([\d.]+)", line)
+            if mm and dur:
+                cur = int(mm.group(1)) * 3600 + int(mm.group(2)) * 60 + float(mm.group(3))
+                task["percent"] = min(99, int(cur / dur * 100))
+        rc = p.wait()
+        if rc == 0 and os.path.exists(out):
+            mb = os.path.getsize(out) / 1048576
+            task["size_mb"] = round(mb, 1)
+            task["percent"] = 100
+            task["status"] = "done"
+            task["detail"] = "완료 · %.1f MB (%s)" % (mb, os.path.basename(out))
+        else:
+            task["status"] = "error"
+            task["detail"] = "압축 실패 (ffmpeg rc=%s)" % rc
+    except Exception as e:  # noqa
+        task["status"] = "error"
+        task["detail"] = "오류: %s" % e
+    finally:
+        task.pop("proc", None)
+
+
+def start_compress(filename, target_mb=480):
+    src = os.path.join(REC_DIR, filename)
+    if not os.path.isfile(src):
+        raise ValueError("파일을 찾을 수 없습니다")
+    stem = os.path.splitext(filename)[0]
+    out = os.path.join(REC_DIR, stem + ANALYSIS_SUFFIX + ".mp4")
+    tid = uuid.uuid4().hex[:8]
+    task = {"id": tid, "src": src, "out": out, "file": filename,
+            "out_name": os.path.basename(out), "target_mb": target_mb,
+            "status": "starting", "percent": 0, "detail": "준비 중...",
+            "created": time.time()}
+    with _ctask_lock:
+        compress_tasks[tid] = task
+    threading.Thread(target=_compress_worker, args=(task,), daemon=True).start()
+    return task
+
+
+def compress_public(task):
+    return {k: task[k] for k in
+            ("id", "file", "out_name", "status", "percent", "detail",
+             "size_mb", "target_mb", "created") if k in task}
+
+
+# ---------------------------------------------------------------------------
 # HTTP 핸들러
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -607,6 +727,13 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 return self._send_json({"error": "not found"}, 404)
             return self._send_json({"log": list(job.log), "progress": job.progress})
+        if path == "/api/recordings":
+            return self._send_json({"files": list_recordings()})
+        if path == "/api/compress":
+            with _ctask_lock:
+                items = [compress_public(t) for t in compress_tasks.values()]
+            items.sort(key=lambda x: x.get("created", 0))
+            return self._send_json({"tasks": items})
         self.send_error(404)
 
     def do_POST(self):
@@ -622,6 +749,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa
                 return self._send_json({"error": str(e)}, 400)
             return self._send_json({"ok": True, "job": job.to_dict()})
+        if path == "/api/compress":
+            body = self._body_json()
+            try:
+                tmb = int(body.get("target_mb", 480) or 480)
+                task = start_compress(body.get("file", ""), max(50, min(490, tmb)))
+            except Exception as e:  # noqa
+                return self._send_json({"error": str(e)}, 400)
+            return self._send_json({"ok": True, "task": compress_public(task)})
         if path.startswith("/api/jobs/") and path.endswith("/stop"):
             return self._send_json({"ok": stop_job(path.split("/")[3])})
         if path.startswith("/api/jobs/") and path.endswith("/kill"):

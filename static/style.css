@@ -215,4 +215,25 @@ body {
   white-space: pre-wrap; word-break: break-all; line-height: 1.5;
 }
 
+/* 저장된 파일 */
+.files { margin: 0 22px 50px; }
+.files-hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+.file-list { display: flex; flex-direction: column; gap: 8px; }
+.file-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 11px 14px;
+}
+.file-row.analysis { box-shadow: inset 3px 0 0 var(--green); }
+.file-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { font-size: 12px; color: var(--muted); background: var(--panel-2); padding: 2px 9px; border-radius: 6px; white-space: nowrap; }
+.file-size.over { color: var(--yellow); }
+.file-size.under { color: var(--green); }
+.cmp-prog {
+  font-family: "Consolas", monospace; font-size: 12px; color: var(--blue);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cmp-bar { width: 90px; height: 5px; background: #1a1f27; border-radius: 3px; overflow: hidden; }
+.cmp-bar > div { height: 100%; background: var(--blue); transition: width .3s; }
+
 .hidden { display: none !important; }

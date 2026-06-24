@@ -215,8 +215,75 @@ $("logModal").addEventListener("click", (e) => {
   if (e.target === $("logModal")) { $("logModal").classList.add("hidden"); logTarget = null; }
 });
 
+// ---------- 저장된 파일 / 분석용 압축 ----------
+let compressTasks = {};
+
+async function pollCompress() {
+  try {
+    const data = await api("/api/compress");
+    compressTasks = {};
+    for (const t of (data.tasks || [])) compressTasks[t.file] = t;
+  } catch (e) { /* ignore */ }
+}
+
+async function pollRecordings() {
+  let data;
+  try { data = await api("/api/recordings"); } catch (e) { return; }
+  const files = (data.files || []).filter(f => !f.is_analysis);
+  const analysis = new Set((data.files || []).filter(f => f.is_analysis)
+    .map(f => f.name));
+  $("fileCount").textContent = files.length;
+  $("fileEmpty").classList.toggle("hidden", files.length > 0);
+
+  const list = $("fileList");
+  list.innerHTML = "";
+  for (const f of files) {
+    const row = document.createElement("div");
+    const task = compressTasks[f.name];
+    const stem = f.name.replace(/\.[^.]+$/, "");
+    const hasAnalysis = analysis.has(stem + "_분석용.mp4");
+    row.className = "file-row";
+
+    const sizeCls = f.size_mb < 500 ? "under" : "over";
+    let right = "";
+    if (task && (task.status === "compressing" || task.status === "starting")) {
+      right = `<span class="cmp-prog">${task.percent || 0}% · ${esc(task.detail || "")}</span>
+               <div class="cmp-bar"><div style="width:${task.percent || 0}%"></div></div>`;
+    } else if (task && task.status === "done") {
+      right = `<span class="cmp-prog" style="color:var(--green)">✓ ${esc(task.detail || "완료")}</span>`;
+    } else if (task && task.status === "error") {
+      right = `<span class="cmp-prog" style="color:var(--accent-2)">✕ ${esc(task.detail || "실패")}</span>
+               <button class="ghost-btn small" data-cmp="${esc(f.name)}">다시</button>`;
+    } else if (hasAnalysis) {
+      right = `<span class="cmp-prog" style="color:var(--green)">✓ 분석용 있음</span>
+               <button class="ghost-btn small" data-cmp="${esc(f.name)}">다시 압축</button>`;
+    } else {
+      right = `<button class="ghost-btn small" data-cmp="${esc(f.name)}">📉 분석용(≤500MB)</button>`;
+    }
+
+    row.innerHTML = `
+      <span class="file-name">${esc(f.name)}</span>
+      <span class="file-size ${sizeCls}">${f.size_mb} MB</span>
+      ${right}`;
+    list.appendChild(row);
+  }
+}
+
+$("fileList").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-cmp]");
+  if (!btn) return;
+  const file = btn.dataset.cmp;
+  btn.disabled = true;
+  const r = await api("/api/compress", "POST", { file });
+  if (r.error) { alert("압축 시작 실패: " + r.error); btn.disabled = false; return; }
+  await pollCompress();
+  pollRecordings();
+});
+
 // ---------- 루프 ----------
 pollStatus();
 pollJobs();
+pollCompress().then(pollRecordings);
 setInterval(pollStatus, 1500);
 setInterval(pollJobs, 1500);
+setInterval(async () => { await pollCompress(); pollRecordings(); }, 1500);
