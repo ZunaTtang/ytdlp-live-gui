@@ -1,0 +1,25 @@
+# 녹화 결과물 (개인 데이터 — 절대 커밋 안 함)
+recordings/
+
+# 자동 다운로드되는 바이너리 (용량 큼, 첫 실행 시 받음)
+bin/
+
+# 쿠키/인증 파일
+*.cookies
+cookies.txt
+
+# 로컬 에디터/에이전트 설정
+.claude/
+.vscode/
+.idea/
+
+# 파이썬
+__pycache__/
+*.pyc
+
+# OS / 임시
+.DS_Store
+Thumbs.db
+_recover.json
+_loginspect.txt
+*.log

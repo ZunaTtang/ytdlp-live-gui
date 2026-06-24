@@ -1,0 +1,4 @@
+# 줄바꿈 정규화 (크로스플랫폼)
+* text=auto eol=lf
+*.bat text eol=crlf
+*.sh  text eol=lf
