@@ -107,6 +107,9 @@ yt-dlp가 지원하는 **약 1700개 사이트**를 받을 수 있습니다.
 - **NVIDIA GPU가 있으면 자동으로 GPU 사용**(빠름, 예: RTX 3060에서 약 5배속 → 4시간 영상 ≈ 50분).
   GPU가 없으면 CPU로 동작(느림).
 - 한국어 정확도는 `large-v3`가 가장 좋습니다.
+- **이어하기**: 전사 중 멈춰도 그때까지의 대본은 저장됩니다. 다시 **이어하기**(또는 같은 파일에
+  대본 추출)를 누르면 **끊긴 지점부터 이어서** 진행합니다. 처음부터 다시 하려면 `_대본.srt/.txt`를
+  지우거나 `python transcribe.py <파일> --out <경로> --restart` 를 쓰세요.
 - 💡 **자막이 있는 영상**(많은 유튜브 VOD)은 전사할 필요 없이 yt-dlp로 자막을 바로 받는 게 빠릅니다:
   `yt-dlp --write-auto-subs --sub-langs ko --convert-subs srt --skip-download <URL>`
 

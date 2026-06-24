@@ -265,7 +265,7 @@ function transcriptCtl(f) {
             <button class="ghost-btn small" data-stt="${esc(f.name)}">다시</button>`;
   if (f.has_transcript)
     return `<span class="cmp-prog" style="color:var(--green)">✓ 대본 있음</span>
-            <button class="ghost-btn small" data-stt="${esc(f.name)}">다시</button>`;
+            <button class="ghost-btn small" data-stt="${esc(f.name)}" title="끊긴 지점부터 이어서 전사">이어하기</button>`;
   return `<button class="ghost-btn small" data-stt="${esc(f.name)}">📝 대본 추출</button>`;
 }
 
