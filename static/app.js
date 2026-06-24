@@ -226,12 +226,59 @@ async function pollCompress() {
   } catch (e) { /* ignore */ }
 }
 
+let transcribeTasks = {};
+async function pollTranscribe() {
+  try {
+    const data = await api("/api/transcribe");
+    transcribeTasks = {};
+    for (const t of (data.tasks || [])) transcribeTasks[t.file] = t;
+  } catch (e) { /* ignore */ }
+}
+
+function progHtml(task, color) {
+  const c = color || "var(--blue)";
+  return `<span class="cmp-prog" style="color:${c}">${task.percent || 0}% · ${esc(task.detail || "")}</span>
+          <div class="cmp-bar"><div style="width:${task.percent || 0}%"></div></div>`;
+}
+
+function compressCtl(f) {
+  const t = compressTasks[f.name];
+  const active = t && (t.status === "compressing" || t.status === "starting");
+  if (active) return progHtml(t);
+  if (t && t.status === "done")
+    return `<span class="cmp-prog" style="color:var(--green)">✓ ${esc(t.detail || "압축 완료")}</span>`;
+  if (t && t.status === "error")
+    return `<span class="cmp-prog" style="color:var(--accent-2)">✕ 압축 실패</span>
+            <button class="ghost-btn small" data-cmp="${esc(f.name)}">다시</button>`;
+  const label = f.has_analysis_sibling ? "다시 압축" : "📉 분석용(≤500MB)";
+  return `<button class="ghost-btn small" data-cmp="${esc(f.name)}">${label}</button>`;
+}
+
+function transcriptCtl(f) {
+  const t = transcribeTasks[f.name];
+  const active = t && ["starting", "installing", "transcribing"].includes(t.status);
+  if (active) return progHtml(t, "var(--yellow)");
+  if (t && t.status === "done")
+    return `<span class="cmp-prog" style="color:var(--green)">✓ 대본 생성됨 (.txt/.srt)</span>`;
+  if (t && t.status === "error")
+    return `<span class="cmp-prog" style="color:var(--accent-2)">✕ ${esc(t.detail || "전사 실패")}</span>
+            <button class="ghost-btn small" data-stt="${esc(f.name)}">다시</button>`;
+  if (f.has_transcript)
+    return `<span class="cmp-prog" style="color:var(--green)">✓ 대본 있음</span>
+            <button class="ghost-btn small" data-stt="${esc(f.name)}">다시</button>`;
+  return `<button class="ghost-btn small" data-stt="${esc(f.name)}">📝 대본 추출</button>`;
+}
+
 async function pollRecordings() {
   let data;
   try { data = await api("/api/recordings"); } catch (e) { return; }
-  const files = (data.files || []).filter(f => !f.is_analysis);
-  const analysis = new Set((data.files || []).filter(f => f.is_analysis)
-    .map(f => f.name));
+  const all = data.files || [];
+  const analysis = new Set(all.filter(f => f.is_analysis).map(f => f.name));
+  const files = all.filter(f => !f.is_analysis);
+  files.forEach(f => {
+    const stem = f.name.replace(/\.[^.]+$/, "");
+    f.has_analysis_sibling = analysis.has(stem + "_분석용.mp4");
+  });
   $("fileCount").textContent = files.length;
   $("fileEmpty").classList.toggle("hidden", files.length > 0);
 
@@ -239,51 +286,41 @@ async function pollRecordings() {
   list.innerHTML = "";
   for (const f of files) {
     const row = document.createElement("div");
-    const task = compressTasks[f.name];
-    const stem = f.name.replace(/\.[^.]+$/, "");
-    const hasAnalysis = analysis.has(stem + "_분석용.mp4");
     row.className = "file-row";
-
     const sizeCls = f.size_mb < 500 ? "under" : "over";
-    let right = "";
-    if (task && (task.status === "compressing" || task.status === "starting")) {
-      right = `<span class="cmp-prog">${task.percent || 0}% · ${esc(task.detail || "")}</span>
-               <div class="cmp-bar"><div style="width:${task.percent || 0}%"></div></div>`;
-    } else if (task && task.status === "done") {
-      right = `<span class="cmp-prog" style="color:var(--green)">✓ ${esc(task.detail || "완료")}</span>`;
-    } else if (task && task.status === "error") {
-      right = `<span class="cmp-prog" style="color:var(--accent-2)">✕ ${esc(task.detail || "실패")}</span>
-               <button class="ghost-btn small" data-cmp="${esc(f.name)}">다시</button>`;
-    } else if (hasAnalysis) {
-      right = `<span class="cmp-prog" style="color:var(--green)">✓ 분석용 있음</span>
-               <button class="ghost-btn small" data-cmp="${esc(f.name)}">다시 압축</button>`;
-    } else {
-      right = `<button class="ghost-btn small" data-cmp="${esc(f.name)}">📉 분석용(≤500MB)</button>`;
-    }
-
     row.innerHTML = `
       <span class="file-name">${esc(f.name)}</span>
       <span class="file-size ${sizeCls}">${f.size_mb} MB</span>
-      ${right}`;
+      <span class="file-ctl">${compressCtl(f)}</span>
+      <span class="file-ctl">${transcriptCtl(f)}</span>`;
     list.appendChild(row);
   }
 }
 
 $("fileList").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-cmp]");
-  if (!btn) return;
-  const file = btn.dataset.cmp;
-  btn.disabled = true;
-  const r = await api("/api/compress", "POST", { file });
-  if (r.error) { alert("압축 시작 실패: " + r.error); btn.disabled = false; return; }
-  await pollCompress();
-  pollRecordings();
+  const cmp = e.target.closest("button[data-cmp]");
+  const stt = e.target.closest("button[data-stt]");
+  if (cmp) {
+    cmp.disabled = true;
+    const r = await api("/api/compress", "POST", { file: cmp.dataset.cmp });
+    if (r.error) { alert("압축 시작 실패: " + r.error); cmp.disabled = false; return; }
+    await pollCompress(); pollRecordings();
+  } else if (stt) {
+    if (!confirm("이 파일의 대본을 추출할까요?\n음성 길이에 따라 시간이 걸립니다 (GPU 사용 시 빠름). 결과는 .txt/.srt로 저장됩니다.")) return;
+    stt.disabled = true;
+    const r = await api("/api/transcribe", "POST", { file: stt.dataset.stt });
+    if (r.error) { alert("대본 추출 시작 실패: " + r.error); stt.disabled = false; return; }
+    await pollTranscribe(); pollRecordings();
+  }
 });
 
 // ---------- 루프 ----------
 pollStatus();
 pollJobs();
-pollCompress().then(pollRecordings);
+Promise.all([pollCompress(), pollTranscribe()]).then(pollRecordings);
 setInterval(pollStatus, 1500);
 setInterval(pollJobs, 1500);
-setInterval(async () => { await pollCompress(); pollRecordings(); }, 1500);
+setInterval(async () => {
+  await Promise.all([pollCompress(), pollTranscribe()]);
+  pollRecordings();
+}, 1500);

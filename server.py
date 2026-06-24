@@ -562,10 +562,12 @@ def list_recordings():
         p = os.path.join(REC_DIR, f)
         if not os.path.isfile(p):
             continue
+        stem = os.path.splitext(f)[0]
         out.append({
             "name": f,
             "size_mb": round(os.path.getsize(p) / 1048576, 1),
             "is_analysis": ANALYSIS_SUFFIX in f,
+            "has_transcript": os.path.exists(os.path.join(REC_DIR, stem + "_대본.txt")),
         })
     return out
 
@@ -663,6 +665,95 @@ def compress_public(task):
 
 
 # ---------------------------------------------------------------------------
+# 대본 추출 (음성 전사, faster-whisper · GPU 우선)
+# ---------------------------------------------------------------------------
+transcribe_tasks = {}
+_ttask_lock = threading.Lock()
+
+
+def _transcribe_worker(task):
+    pyexe = sys.executable or "python"
+    src, out_base = task["src"], task["out_base"]
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        # 1) 엔진(faster-whisper) 설치 확인 → 없으면 자동 설치
+        chk = subprocess.run([pyexe, "-c", "import faster_whisper"],
+                             capture_output=True)
+        if chk.returncode != 0:
+            task["status"] = "installing"
+            task["detail"] = "음성 인식 엔진 설치 중... (최초 1회, 수 분 소요)"
+            ins = subprocess.run(
+                [pyexe, "-m", "pip", "install", "-q", "faster-whisper",
+                 "nvidia-cublas-cu12", "nvidia-cudnn-cu12"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
+            if ins.returncode != 0:
+                raise RuntimeError("엔진 설치 실패: " + (ins.stderr or "")[:200])
+
+        # 2) 전사 실행
+        task["status"] = "transcribing"
+        task["detail"] = "모델 로딩 중... (모델 최초 사용 시 다운로드)"
+        cmd = [pyexe, os.path.join(BASE_DIR, "transcribe.py"), src,
+               "--out", out_base, "--model", task["model"], "--lang", task["lang"]]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True,
+                             encoding="utf-8", errors="replace", env=env)
+        task["proc"] = p
+        for line in p.stdout:
+            line = line.strip()
+            if line.startswith("DEVICE "):
+                task["device"] = line.split()[1]
+            elif line.startswith("PROGRESS "):
+                try:
+                    _, cur, tot = line.split()
+                    if float(tot):
+                        task["percent"] = min(99, int(float(cur) / float(tot) * 100))
+                    task["detail"] = "전사 중 (%s) · %d%%" % (
+                        task.get("device", "gpu"), task["percent"])
+                except Exception:
+                    pass
+            elif line.startswith("DONE "):
+                task["segments"] = line.split()[1]
+        rc = p.wait()
+        if rc == 0 and os.path.exists(out_base + ".txt"):
+            task["percent"] = 100
+            task["status"] = "done"
+            task["txt"] = os.path.basename(out_base + ".txt")
+            task["detail"] = "완료 · %s (.txt / .srt)" % task["txt"]
+        else:
+            task["status"] = "error"
+            task["detail"] = "전사 실패 (rc=%s)" % rc
+    except Exception as e:  # noqa
+        task["status"] = "error"
+        task["detail"] = "오류: %s" % e
+    finally:
+        task.pop("proc", None)
+
+
+def start_transcribe(filename, model="large-v3", lang="ko"):
+    src = os.path.join(REC_DIR, filename)
+    if not os.path.isfile(src):
+        raise ValueError("파일을 찾을 수 없습니다")
+    stem = os.path.splitext(filename)[0]
+    out_base = os.path.join(REC_DIR, stem + "_대본")
+    tid = uuid.uuid4().hex[:8]
+    task = {"id": tid, "src": src, "out_base": out_base, "file": filename,
+            "model": model, "lang": lang, "status": "starting", "percent": 0,
+            "detail": "준비 중...", "created": time.time()}
+    with _ttask_lock:
+        transcribe_tasks[tid] = task
+    threading.Thread(target=_transcribe_worker, args=(task,), daemon=True).start()
+    return task
+
+
+def transcribe_public(task):
+    return {k: task[k] for k in
+            ("id", "file", "status", "percent", "detail", "txt",
+             "device", "model", "created") if k in task}
+
+
+# ---------------------------------------------------------------------------
 # HTTP 핸들러
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -734,6 +825,11 @@ class Handler(BaseHTTPRequestHandler):
                 items = [compress_public(t) for t in compress_tasks.values()]
             items.sort(key=lambda x: x.get("created", 0))
             return self._send_json({"tasks": items})
+        if path == "/api/transcribe":
+            with _ttask_lock:
+                items = [transcribe_public(t) for t in transcribe_tasks.values()]
+            items.sort(key=lambda x: x.get("created", 0))
+            return self._send_json({"tasks": items})
         self.send_error(404)
 
     def do_POST(self):
@@ -757,6 +853,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa
                 return self._send_json({"error": str(e)}, 400)
             return self._send_json({"ok": True, "task": compress_public(task)})
+        if path == "/api/transcribe":
+            body = self._body_json()
+            try:
+                task = start_transcribe(body.get("file", ""),
+                                        body.get("model") or "large-v3",
+                                        body.get("lang") or "ko")
+            except Exception as e:  # noqa
+                return self._send_json({"error": str(e)}, 400)
+            return self._send_json({"ok": True, "task": transcribe_public(task)})
         if path.startswith("/api/jobs/") and path.endswith("/stop"):
             return self._send_json({"ok": stop_job(path.split("/")[3])})
         if path.startswith("/api/jobs/") and path.endswith("/kill"):

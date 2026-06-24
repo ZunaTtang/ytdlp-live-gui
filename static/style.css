@@ -225,7 +225,8 @@ body {
   border-radius: 10px; padding: 11px 14px;
 }
 .file-row.analysis { box-shadow: inset 3px 0 0 var(--green); }
-.file-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-name { flex: 1; min-width: 120px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-ctl { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .file-size { font-size: 12px; color: var(--muted); background: var(--panel-2); padding: 2px 9px; border-radius: 6px; white-space: nowrap; }
 .file-size.over { color: var(--yellow); }
 .file-size.under { color: var(--green); }
